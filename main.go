@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
@@ -99,10 +100,14 @@ func handleGeneve(conn *net.UDPConn, tunnel *water.Interface) {
 	log.WithField("addr", addr).Debug("RX packet from UDP client")
 
 	packet := gopacket.NewPacket(buffer, layers.LayerTypeGeneve, gopacket.Default)
+	if err := packet.ErrorLayer(); err != nil {
+		log.Errorf("Unable to decode part of the packet:", err)
+		return
+	}
+
 	log.WithFields(log.Fields{
-		"packet": packet,
 		"client_addr": addr,
-	}).Trace("Packet decoded")
+	}).Tracef("Packet decoded:\n%s\n", packet)
 
 	// Guard against AWS suddenly supporting new GENEVE-encapsulated formats we don't understand
 	// (we aren't trying to become a generic GENEVE tunnel here)
@@ -114,7 +119,14 @@ func handleGeneve(conn *net.UDPConn, tunnel *water.Interface) {
 	}
 
 	// Pass the packet to the tunnel device
-	_, err = tunnel.Write(packet.Layers()[1].LayerPayload())
+	decap := packet.Layers()[1:]
+	var buf [][]byte
+	for _, layer := range decap {
+		buf = append(buf, layer.LayerContents())
+	}
+	// packet.Layers()[1].LayerContents()
+	// TODO: There must be a better way than appending a buffer and joining it with an empty byte?
+	_, err = tunnel.Write(bytes.Join(buf, []byte{}))
 	if err != nil {
 		log.Fatalf("Unable to write packet to tunnel device: %s\n", err)
 	}
